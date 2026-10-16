@@ -201,6 +201,64 @@ CREATE POLICY "Workspace isolation: business_searches" ON public.business_search
 CREATE POLICY "Workspace isolation: business_search_results" ON public.business_search_results
     FOR ALL USING (workspace_id = public.current_user_workspace_id());`;
 
+const SECURITY_MIGRATION_SQL = `-- JOTA Prospect Intelligence — 007_security_advisor_fixes.sql
+-- 1. handle_updated_at: Define search_path e usa now() direto para TIMESTAMPTZ
+CREATE OR REPLACE FUNCTION public.handle_updated_at()
+RETURNS TRIGGER LANGUAGE plpgsql SET search_path = '' AS $$
+BEGIN
+    NEW.updated_at = pg_catalog.now();
+    RETURN NEW;
+END;
+$$;
+ALTER FUNCTION public.handle_updated_at() OWNER TO postgres;
+REVOKE ALL ON FUNCTION public.handle_updated_at() FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.handle_updated_at() TO authenticated, service_role;
+
+-- 2. handle_new_user: Validação estrita de metadados, auto-provisionamento de workspace e RBAC seguro
+CREATE OR REPLACE FUNCTION public.handle_new_user()
+RETURNS TRIGGER LANGUAGE plpgsql SECURITY DEFINER SET search_path = '' AS $$
+DECLARE
+    v_workspace_id UUID;
+    v_full_name TEXT;
+BEGIN
+    IF EXISTS (SELECT 1 FROM public.profiles p WHERE p.id = NEW.id) THEN
+        UPDATE public.profiles p
+        SET full_name = pg_catalog.coalesce(
+                pg_catalog.nullif(pg_catalog.trim(NEW.raw_user_meta_data->>'full_name'), ''),
+                p.full_name
+            ),
+            updated_at = pg_catalog.now()
+        WHERE p.id = NEW.id;
+        RETURN NEW;
+    END IF;
+
+    v_full_name := pg_catalog.coalesce(
+        pg_catalog.nullif(pg_catalog.trim(NEW.raw_user_meta_data->>'full_name'), ''),
+        pg_catalog.split_part(NEW.email, '@', 1)
+    );
+
+    v_workspace_id := pg_catalog.gen_random_uuid();
+    INSERT INTO public.workspaces (id, name, created_at)
+    VALUES (v_workspace_id, 'Espaço Comercial - ' || v_full_name, pg_catalog.now());
+
+    INSERT INTO public.profiles (id, workspace_id, full_name, email, role, created_at, updated_at)
+    VALUES (NEW.id, v_workspace_id, v_full_name, NEW.email, 'Admin', pg_catalog.now(), pg_catalog.now());
+    RETURN NEW;
+END;
+$$;
+ALTER FUNCTION public.handle_new_user() OWNER TO postgres;
+REVOKE ALL ON FUNCTION public.handle_new_user() FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.handle_new_user() TO postgres, supabase_auth_admin, service_role;
+
+-- 3. current_user_workspace_id: STABLE SECURITY DEFINER (evita recursão RLS), search_path=''
+CREATE OR REPLACE FUNCTION public.current_user_workspace_id()
+RETURNS UUID LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' AS $$
+    SELECT p.workspace_id FROM public.profiles p WHERE p.id = (SELECT auth.uid());
+$$;
+ALTER FUNCTION public.current_user_workspace_id() OWNER TO postgres;
+REVOKE ALL ON FUNCTION public.current_user_workspace_id() FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.current_user_workspace_id() TO authenticated, service_role;`;
+
 export const SettingsView: React.FC<SettingsViewProps> = ({
   currentUser,
   activeWorkspaceId,
@@ -215,7 +273,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null);
   const [testing, setTesting] = useState(false);
   const [copied, setCopied] = useState(false);
-  const [activeMigrationTab, setActiveMigrationTab] = useState<'001' | '003'>('001');
+  const [activeMigrationTab, setActiveMigrationTab] = useState<'001' | '003' | '007'>('001');
 
   useEffect(() => {
     const cfg = getSavedSupabaseConfig();
@@ -284,7 +342,9 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   };
 
   const copyMigration = () => {
-    const sqlToCopy = activeMigrationTab === '001' ? INITIAL_MIGRATION_SQL : PLACES_SEARCH_MIGRATION_SQL;
+    let sqlToCopy = INITIAL_MIGRATION_SQL;
+    if (activeMigrationTab === '003') sqlToCopy = PLACES_SEARCH_MIGRATION_SQL;
+    if (activeMigrationTab === '007') sqlToCopy = SECURITY_MIGRATION_SQL;
     navigator.clipboard.writeText(sqlToCopy);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
@@ -491,7 +551,18 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                     : 'text-slate-600 hover:text-slate-900'
                 }`}
               >
-                003 (Fase 2: Busca de Empresas)
+                003 (Fase 2: Busca)
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveMigrationTab('007')}
+                className={`px-3 py-1.5 rounded-md transition-colors ${
+                  activeMigrationTab === '007'
+                    ? 'bg-white text-slate-900 shadow-xs font-semibold'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                007 (Segurança & Hardening)
               </button>
             </div>
 
@@ -516,10 +587,23 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
 
         <div className="p-6">
           <div className="bg-slate-900 rounded-lg p-4 font-mono text-xs text-slate-300 max-h-72 overflow-y-auto leading-relaxed border border-slate-800">
-            <pre>{activeMigrationTab === '001' ? INITIAL_MIGRATION_SQL : PLACES_SEARCH_MIGRATION_SQL}</pre>
+            <pre>
+              {activeMigrationTab === '001'
+                ? INITIAL_MIGRATION_SQL
+                : activeMigrationTab === '003'
+                ? PLACES_SEARCH_MIGRATION_SQL
+                : SECURITY_MIGRATION_SQL}
+            </pre>
           </div>
           <p className="text-[11px] text-slate-500 mt-3">
-            Arquivo: <code className="bg-slate-100 px-1 py-0.5 rounded font-mono text-[11px]">{activeMigrationTab === '001' ? '/supabase/migrations/001_initial_schema.sql' : '/supabase/migrations/003_business_searches.sql'}</code>.
+            Arquivo:{' '}
+            <code className="bg-slate-100 px-1 py-0.5 rounded font-mono text-[11px]">
+              {activeMigrationTab === '001'
+                ? '/supabase/migrations/001_initial_schema.sql'
+                : activeMigrationTab === '003'
+                ? '/supabase/migrations/003_business_searches.sql'
+                : '/supabase/migrations/007_security_advisor_fixes.sql'}
+            </code>.
           </p>
         </div>
       </div>
