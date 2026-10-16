@@ -7,6 +7,13 @@
 -- 1. Habilitar extensão de UUID
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
+-- 1.1 Tabela: WORKSPACES (Espaços de Trabalho / Multi-tenant)
+CREATE TABLE IF NOT EXISTS public.workspaces (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    name TEXT NOT NULL DEFAULT 'Espaço Principal',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now())
+);
+
 -- 2. Tabela: PROFILES (Perfis de Usuários e Vínculo com Workspace)
 CREATE TABLE IF NOT EXISTS public.profiles (
     id UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,

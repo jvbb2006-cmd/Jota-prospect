@@ -17,6 +17,13 @@ ALTER TABLE public.activities
   ADD COLUMN IF NOT EXISTS event_type VARCHAR(50) NULL,
   ADD COLUMN IF NOT EXISTS metadata JSONB NOT NULL DEFAULT '{}'::jsonb;
 
+-- Garantir que a tabela public.workspaces exista
+CREATE TABLE IF NOT EXISTS public.workspaces (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  name TEXT NOT NULL DEFAULT 'Espaço Principal',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now())
+);
+
 -- 3. Tabela de Mensagens da Central de Abordagem (4 etapas)
 CREATE TABLE IF NOT EXISTS public.outreach_messages (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),

@@ -15,8 +15,14 @@ export class GooglePlacesProvider implements BusinessSearchProvider {
         'Content-Type': 'application/json',
       };
 
-      if (customApiKey && customApiKey.trim()) {
-        headers['x-google-maps-api-key'] = customApiKey.trim();
+      const keyToSend =
+        customApiKey?.trim() ||
+        (typeof localStorage !== 'undefined'
+          ? localStorage.getItem('jota_google_maps_key')?.trim()
+          : '');
+
+      if (keyToSend) {
+        headers['x-google-maps-api-key'] = keyToSend;
       }
 
       const response = await fetch('/api/search-businesses', {

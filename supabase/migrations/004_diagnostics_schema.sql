@@ -4,6 +4,13 @@
 -- Description: Tabelas de diagnósticos 360°, histórico de versões e findings
 -- ==============================================================================
 
+-- Garantir que a tabela public.workspaces exista
+CREATE TABLE IF NOT EXISTS public.workspaces (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  name TEXT NOT NULL DEFAULT 'Espaço Principal',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now())
+);
+
 -- 1. Tabela de Diagnósticos (versões históricas independentes por empresa)
 CREATE TABLE IF NOT EXISTS public.diagnostics (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
