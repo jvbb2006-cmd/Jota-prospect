@@ -1,0 +1,8 @@
+{
+  "name": "JOTA Prospect Intelligence",
+  "description": "Plataforma SaaS B2B de inteligência de prospecção comercial, CRM em Kanban, enriquecimento de leads e arquitetura Supabase.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
