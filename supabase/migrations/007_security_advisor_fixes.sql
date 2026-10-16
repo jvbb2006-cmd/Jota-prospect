@@ -78,8 +78,8 @@ BEGIN
     -- 1. Se o perfil já existe para este usuário, não cria novo workspace nem altera permissões
     IF EXISTS (SELECT 1 FROM public.profiles p WHERE p.id = NEW.id) THEN
         UPDATE public.profiles p
-        SET full_name = pg_catalog.coalesce(
-                pg_catalog.nullif(pg_catalog.trim(NEW.raw_user_meta_data->>'full_name'), ''),
+        SET full_name = COALESCE(
+                NULLIF(pg_catalog.btrim(NEW.raw_user_meta_data->>'full_name'), ''),
                 p.full_name
             ),
             updated_at = pg_catalog.now()
@@ -88,86 +88,9 @@ BEGIN
     END IF;
 
     -- 2. Higienização do Nome Completo
-    v_full_name := pg_catalog.coalesce(
-        pg_catalog.nullif(pg_catalog.trim(NEW.raw_user_meta_data->>'full_name'), ''),
+    v_full_name := COALESCE(
+        NULLIF(pg_catalog.btrim(NEW.raw_user_meta_data->>'full_name'), ''),
         pg_catalog.split_part(NEW.email, '@', 1)
     );
 
     -- 3. Isolamento Multi-Tenant Estrito:
-    -- Todo cadastro público OBRIGATORIAMENTE cria seu próprio novo workspace privado.
-    -- Ignora qualquer workspace_id ou role enviado via raw_user_meta_data.
-    v_workspace_id := pg_catalog.gen_random_uuid();
-
-    INSERT INTO public.workspaces (id, name, created_at)
-    VALUES (
-        v_workspace_id,
-        'Espaço Comercial - ' || v_full_name,
-        pg_catalog.now()
-    );
-
-    -- 4. Criação do Perfil com role 'Admin' do seu próprio novo workspace
-    INSERT INTO public.profiles (
-        id,
-        workspace_id,
-        full_name,
-        email,
-        role,
-        created_at,
-        updated_at
-    )
-    VALUES (
-        NEW.id,
-        v_workspace_id,
-        v_full_name,
-        NEW.email,
-        'Admin',
-        pg_catalog.now(),
-        pg_catalog.now()
-    );
-
-    RETURN NEW;
-END;
-$$;
-
-ALTER FUNCTION public.handle_new_user() OWNER TO postgres;
-
-REVOKE ALL ON FUNCTION public.handle_new_user() FROM PUBLIC;
-REVOKE ALL ON FUNCTION public.handle_new_user() FROM anon;
-REVOKE ALL ON FUNCTION public.handle_new_user() FROM authenticated;
-GRANT EXECUTE ON FUNCTION public.handle_new_user() TO postgres;
-GRANT EXECUTE ON FUNCTION public.handle_new_user() TO supabase_auth_admin;
-GRANT EXECUTE ON FUNCTION public.handle_new_user() TO service_role;
-
-
--- ------------------------------------------------------------------------------
--- 3. FUNÇÃO: public.current_user_workspace_id()
--- ------------------------------------------------------------------------------
--- Problema Anterior:
---   - search_path mutável.
---   - Executável por PUBLIC e anon.
--- Correção:
---   - SET search_path = '' com referência qualificada p.workspace_id e auth.uid().
---   - STABLE e SECURITY DEFINER mantidos: imprescindíveis para evitar o erro 42P17
---     (recursão infinita) na política RLS da tabela public.profiles.
---   - Revoga EXECUTE de PUBLIC e anon.
---   - Concede EXECUTE a authenticated e service_role (obrigatório para que as políticas
---     RLS de companies, contacts, tasks, etc. avaliem o isolamento sem erro de permissão).
--- ------------------------------------------------------------------------------
-CREATE OR REPLACE FUNCTION public.current_user_workspace_id()
-RETURNS UUID
-LANGUAGE sql
-STABLE
-SECURITY DEFINER
-SET search_path = ''
-AS $$
-    SELECT p.workspace_id 
-    FROM public.profiles p 
-    WHERE p.id = (SELECT auth.uid());
-$$;
-
-ALTER FUNCTION public.current_user_workspace_id() OWNER TO postgres;
-
-REVOKE ALL ON FUNCTION public.current_user_workspace_id() FROM PUBLIC;
-REVOKE ALL ON FUNCTION public.current_user_workspace_id() FROM anon;
-GRANT EXECUTE ON FUNCTION public.current_user_workspace_id() TO authenticated;
-GRANT EXECUTE ON FUNCTION public.current_user_workspace_id() TO service_role;
