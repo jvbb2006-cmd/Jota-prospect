@@ -2,12 +2,10 @@
 -- ==============================================================================
 -- JOTA Prospect Intelligence — Fase 3: Diagnóstico 360°
 -- Migration: 004_diagnostics_schema.sql
--- Description: Tabelas de diagnósticos, versões históricas e findings
+-- Versão ajustada para evitar políticas duplicadas e remoções
 -- ==============================================================================
 
 -- 1. Tabela de Diagnósticos
--- A tabela public.workspaces já é criada na migration 001.
-
 CREATE TABLE IF NOT EXISTS public.diagnostics (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   workspace_id UUID NOT NULL REFERENCES public.workspaces(id) ON DELETE CASCADE,
@@ -33,7 +31,7 @@ CREATE TABLE IF NOT EXISTS public.diagnostics (
   CONSTRAINT uq_company_diagnostic_version UNIQUE (company_id, version)
 );
 
--- 2. Achados detalhados por dimensão
+-- 2. Tabela de Achados Detalhados
 CREATE TABLE IF NOT EXISTS public.diagnostic_findings (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   diagnostic_id UUID NOT NULL REFERENCES public.diagnostics(id) ON DELETE CASCADE,
@@ -53,12 +51,12 @@ CREATE TABLE IF NOT EXISTS public.diagnostic_findings (
   dimension_label VARCHAR(100) NOT NULL,
   status VARCHAR(30) NOT NULL DEFAULT 'verified'
     CHECK (status IN ('verified', 'unverified', 'failed', 'not_applicable', 'partially_verified')),
-  score NUMERIC(5,2) NULL
+  score NUMERIC(5,2)
     CHECK (score IS NULL OR (score >= 0 AND score <= 100)),
   weight NUMERIC(5,2) NOT NULL DEFAULT 10.0,
   observed_fact TEXT NOT NULL,
   evidence_found TEXT NOT NULL,
-  source_url TEXT NULL,
+  source_url TEXT,
   observation_date TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now()),
   confidence_level VARCHAR(20) NOT NULL DEFAULT 'alta'
     CHECK (confidence_level IN ('alta', 'media', 'baixa')),
@@ -89,127 +87,157 @@ CREATE INDEX IF NOT EXISTS idx_diagnostic_findings_workspace
 CREATE INDEX IF NOT EXISTS idx_diagnostic_findings_dimension
   ON public.diagnostic_findings(dimension);
 
--- 4. Habilitar RLS
+-- 4. Ativar RLS nas tabelas de diagnóstico
 ALTER TABLE public.diagnostics ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.diagnostic_findings ENABLE ROW LEVEL SECURITY;
 
--- 5. Remover políticas anteriores para permitir reexecução segura
-DROP POLICY IF EXISTS "diagnostics_select_policy" ON public.diagnostics;
-DROP POLICY IF EXISTS "diagnostics_insert_policy" ON public.diagnostics;
-DROP POLICY IF EXISTS "diagnostics_update_policy" ON public.diagnostics;
-DROP POLICY IF EXISTS "diagnostics_delete_policy" ON public.diagnostics;
+-- 5. Criar somente políticas que ainda não existem
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_policies
+    WHERE schemaname = 'public'
+      AND tablename = 'diagnostics'
+      AND policyname = 'diagnostics_select_policy'
+  ) THEN
+    CREATE POLICY diagnostics_select_policy
+      ON public.diagnostics FOR SELECT
+      USING (
+        workspace_id = (
+          SELECT p.workspace_id FROM public.profiles p
+          WHERE p.id = auth.uid()
+        )
+      );
+  END IF;
 
-DROP POLICY IF EXISTS "findings_select_policy" ON public.diagnostic_findings;
-DROP POLICY IF EXISTS "findings_insert_policy" ON public.diagnostic_findings;
-DROP POLICY IF EXISTS "findings_delete_policy" ON public.diagnostic_findings;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_policies
+    WHERE schemaname = 'public'
+      AND tablename = 'diagnostics'
+      AND policyname = 'diagnostics_insert_policy'
+  ) THEN
+    CREATE POLICY diagnostics_insert_policy
+      ON public.diagnostics FOR INSERT
+      WITH CHECK (
+        workspace_id = (
+          SELECT p.workspace_id FROM public.profiles p
+          WHERE p.id = auth.uid()
+        )
+      );
+  END IF;
 
--- 6. Políticas de Diagnósticos
-CREATE POLICY "diagnostics_select_policy"
-  ON public.diagnostics
-  FOR SELECT
-  USING (
-    workspace_id = (
-      SELECT p.workspace_id
-      FROM public.profiles p
-      WHERE p.id = auth.uid()
-    )
-  );
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_policies
+    WHERE schemaname = 'public'
+      AND tablename = 'diagnostics'
+      AND policyname = 'diagnostics_update_policy'
+  ) THEN
+    CREATE POLICY diagnostics_update_policy
+      ON public.diagnostics FOR UPDATE
+      USING (
+        workspace_id = (
+          SELECT p.workspace_id FROM public.profiles p
+          WHERE p.id = auth.uid()
+        )
+      )
+      WITH CHECK (
+        workspace_id = (
+          SELECT p.workspace_id FROM public.profiles p
+          WHERE p.id = auth.uid()
+        )
+      );
+  END IF;
 
-CREATE POLICY "diagnostics_insert_policy"
-  ON public.diagnostics
-  FOR INSERT
-  WITH CHECK (
-    workspace_id = (
-      SELECT p.workspace_id
-      FROM public.profiles p
-      WHERE p.id = auth.uid()
-    )
-  );
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_policies
+    WHERE schemaname = 'public'
+      AND tablename = 'diagnostics'
+      AND policyname = 'diagnostics_delete_policy'
+  ) THEN
+    CREATE POLICY diagnostics_delete_policy
+      ON public.diagnostics FOR DELETE
+      USING (
+        workspace_id = (
+          SELECT p.workspace_id FROM public.profiles p
+          WHERE p.id = auth.uid()
+        )
+      );
+  END IF;
 
-CREATE POLICY "diagnostics_update_policy"
-  ON public.diagnostics
-  FOR UPDATE
-  USING (
-    workspace_id = (
-      SELECT p.workspace_id
-      FROM public.profiles p
-      WHERE p.id = auth.uid()
-    )
-  )
-  WITH CHECK (
-    workspace_id = (
-      SELECT p.workspace_id
-      FROM public.profiles p
-      WHERE p.id = auth.uid()
-    )
-  );
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_policies
+    WHERE schemaname = 'public'
+      AND tablename = 'diagnostic_findings'
+      AND policyname = 'findings_select_policy'
+  ) THEN
+    CREATE POLICY findings_select_policy
+      ON public.diagnostic_findings FOR SELECT
+      USING (
+        workspace_id = (
+          SELECT p.workspace_id FROM public.profiles p
+          WHERE p.id = auth.uid()
+        )
+      );
+  END IF;
 
-CREATE POLICY "diagnostics_delete_policy"
-  ON public.diagnostics
-  FOR DELETE
-  USING (
-    workspace_id = (
-      SELECT p.workspace_id
-      FROM public.profiles p
-      WHERE p.id = auth.uid()
-    )
-  );
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_policies
+    WHERE schemaname = 'public'
+      AND tablename = 'diagnostic_findings'
+      AND policyname = 'findings_insert_policy'
+  ) THEN
+    CREATE POLICY findings_insert_policy
+      ON public.diagnostic_findings FOR INSERT
+      WITH CHECK (
+        workspace_id = (
+          SELECT p.workspace_id FROM public.profiles p
+          WHERE p.id = auth.uid()
+        )
+      );
+  END IF;
 
--- 7. Políticas de Achados (Findings)
-CREATE POLICY "findings_select_policy"
-  ON public.diagnostic_findings
-  FOR SELECT
-  USING (
-    workspace_id = (
-      SELECT p.workspace_id
-      FROM public.profiles p
-      WHERE p.id = auth.uid()
-    )
-  );
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_policies
+    WHERE schemaname = 'public'
+      AND tablename = 'diagnostic_findings'
+      AND policyname = 'findings_update_policy'
+  ) THEN
+    CREATE POLICY findings_update_policy
+      ON public.diagnostic_findings FOR UPDATE
+      USING (
+        workspace_id = (
+          SELECT p.workspace_id FROM public.profiles p
+          WHERE p.id = auth.uid()
+        )
+      )
+      WITH CHECK (
+        workspace_id = (
+          SELECT p.workspace_id FROM public.profiles p
+          WHERE p.id = auth.uid()
+        )
+      );
+  END IF;
 
-CREATE POLICY "findings_insert_policy"
-  ON public.diagnostic_findings
-  FOR INSERT
-  WITH CHECK (
-    workspace_id = (
-      SELECT p.workspace_id
-      FROM public.profiles p
-      WHERE p.id = auth.uid()
-    )
-  );
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_policies
+    WHERE schemaname = 'public'
+      AND tablename = 'diagnostic_findings'
+      AND policyname = 'findings_delete_policy'
+  ) THEN
+    CREATE POLICY findings_delete_policy
+      ON public.diagnostic_findings FOR DELETE
+      USING (
+        workspace_id = (
+          SELECT p.workspace_id FROM public.profiles p
+          WHERE p.id = auth.uid()
+        )
+      );
+  END IF;
+END
+$$;
 
-CREATE POLICY "findings_update_policy"
-  ON public.diagnostic_findings
-  FOR UPDATE
-  USING (
-    workspace_id = (
-      SELECT p.workspace_id
-      FROM public.profiles p
-      WHERE p.id = auth.uid()
-    )
-  )
-  WITH CHECK (
-    workspace_id = (
-      SELECT p.workspace_id
-      FROM public.profiles p
-      WHERE p.id = auth.uid()
-    )
-  );
-
-CREATE POLICY "findings_delete_policy"
-  ON public.diagnostic_findings
-  FOR DELETE
-  USING (
-    workspace_id = (
-      SELECT p.workspace_id
-      FROM public.profiles p
-      WHERE p.id = auth.uid()
-    )
-  );
-
--- 8. Verificação: confirmar que as tabelas existem
-SELECT
-  table_name
+-- 6. Verificar tabelas criadas
+SELECT table_name
 FROM information_schema.tables
 WHERE table_schema = 'public'
   AND table_name IN ('diagnostics', 'diagnostic_findings');
